@@ -1,344 +1,123 @@
-package com.fiap.bank.atm.presentation;
+package br.com.fiap.bank.view;
 
-import com.formdev.flatlaf.FlatDarkLaf;
-import com.fiap.bank.atm.application.service.AtmService;
-import com.fiap.bank.atm.domain.exception.AccountBlockedException;
-import com.fiap.bank.atm.domain.exception.DailyLimitExceededException;
-import com.fiap.bank.atm.domain.exception.InsufficientFundsException;
-import com.fiap.bank.atm.domain.exception.InvalidPinException;
-import com.fiap.bank.atm.domain.model.Account;
-import com.fiap.bank.atm.domain.model.Transaction;
+import br.com.fiap.bank.dto.AccountInfoDTO;
+import br.com.fiap.bank.enums.ATMState;
+import br.com.fiap.bank.exception.ATMException;
+import br.com.fiap.bank.service.AtmService;
 
 import javax.swing.*;
-import javax.swing.border.LineBorder;
-import java.awt.*;
-import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
-import java.awt.event.KeyEvent;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.List;
 
-public class AtmFrame extends javax.swing.JFrame {
+public class MainFrame extends javax.swing.JFrame {
 
     private final AtmService atmService;
-    private ScreenState currentState;
-    private final StringBuilder inputBuffer;
+    private ATMState currentState;
+    private StringBuilder inputBuffer;
     private String targetAccountNumber;
     private String errorMessage;
 
-    // Animation timers & state
-    private Timer cardLedTimer;
-    private boolean cardLedOn = true;
-    private Timer cashAnimationTimer;
-    private Timer printAnimationTimer;
-    private Timer successTimer;
-
-    // Virtual receipt paper component
-    private JDialog receiptDialog;
-    private JTextArea txtReceiptPaper;
-
-    public AtmFrame(AtmService atmService) {
+    public MainFrame(AtmService atmService) {
         this.atmService = atmService;
         this.inputBuffer = new StringBuilder();
-        this.currentState = ScreenState.WELCOME;
-
-        // Configura Look and Feel FlatLaf
-        try {
-            UIManager.setLookAndFeel(new FlatDarkLaf());
-        } catch (Exception ex) {
-            System.err.println("Falha ao inicializar o FlatLaf Look and Feel");
-        }
+        this.currentState = ATMState.INSERT_CARD;
 
         initComponents();
-        setupCustomStyles();
-        setupListeners();
-        setupTimers();
-        setupKeyboardInterception();
-
-        updateScreen();
+        initCustomListeners();
+        updateUIState();
     }
 
-    private void setupCustomStyles() {
-        // Estilização premium da tela digital (CRT/LCD look)
-        jPanelScreen.setBackground(new Color(11, 18, 28)); // Slate azul muito escuro
-        jPanelScreenHeader.setBackground(new Color(11, 18, 28));
-        jPanelScreenCenter.setBackground(new Color(11, 18, 28));
-        jPanelScreenLeftLabels.setBackground(new Color(11, 18, 28));
-        jPanelScreenRightLabels.setBackground(new Color(11, 18, 28));
+    private void initCustomListeners() {
+        ActionListener numListener = e -> {
+            JButton btn = (JButton) e.getSource();
+            appendInput(btn.getText());
+        };
 
-        lblScreenHeader.setForeground(new Color(254, 240, 138)); // Amarelo néon suave
-        lblScreenStatus.setForeground(new Color(241, 245, 249)); // Branco suave
-        lblScreenInput.setForeground(new Color(56, 189, 248)); // Ciano brilhante
-        lblScreenMessage.setForeground(new Color(234, 113, 113)); // Vermelho claro para alertas
-
-        // Estilizar os botões físicos laterais
-        JButton[] sideButtons = { btnLeft1, btnLeft2, btnLeft3, btnRight1, btnRight2, btnRight3 };
-        for (JButton btn : sideButtons) {
-            btn.setBackground(new Color(51, 65, 85)); // Aço cinza escuro
-            btn.setForeground(Color.WHITE);
-            btn.setFocusPainted(false);
-            btn.setBorder(new LineBorder(new Color(71, 85, 105), 2));
-            btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        }
-
-        // Estilizar teclado numérico
-        JButton[] numericButtons = { btn1, btn2, btn3, btn4, btn5, btn6, btn7, btn8, btn9, btn0, btnBlank, btnC };
-        for (JButton btn : numericButtons) {
-            btn.setFocusPainted(false);
-            btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
-            if (btn == btnC) {
-                btn.setBackground(new Color(189, 58, 58)); // Vermelho cancelamento
-                btn.setForeground(Color.WHITE);
-                btn.setBorder(new LineBorder(new Color(220, 80, 80), 2));
-            } else if (btn == btnBlank) {
-                btn.setBackground(new Color(30, 41, 59));
-                btn.setForeground(new Color(148, 163, 184));
-                btn.setBorder(new LineBorder(new Color(71, 85, 105), 1));
-            } else {
-                btn.setBackground(new Color(30, 41, 59)); // Slate
-                btn.setForeground(new Color(241, 245, 249));
-                btn.setBorder(new LineBorder(new Color(71, 85, 105), 2));
-            }
-        }
-
-        // Estilizar contêineres de periféricos
-        cardSlotContainer.setBackground(new Color(18, 27, 38));
-        receiptPrinterContainer.setBackground(new Color(18, 27, 38));
-        cashDispenserContainer.setBackground(new Color(18, 27, 38));
-    }
-
-    private void setupTimers() {
-        // LED de Cartão piscando no WELCOME
-        cardLedTimer = new Timer(500, new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                if (currentState == ScreenState.WELCOME) {
-                    cardLedOn = !cardLedOn;
-                    if (cardLedOn) {
-                        lblCardIndicatorLed.setForeground(new Color(80, 200, 80));
-                        lblCardIndicatorLed.setText("● INSERIR CARTÃO");
-                    } else {
-                        lblCardIndicatorLed.setForeground(new Color(30, 70, 30));
-                        lblCardIndicatorLed.setText("  INSERIR CARTÃO");
-                    }
-                }
-            }
-        });
-        cardLedTimer.start();
-
-        // Temporizador para dispensar dinheiro
-        cashAnimationTimer = new Timer(3000, new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                cashAnimationTimer.stop();
-                lblCashDispenserStatus.setText("FECHADO");
-                lblCashDispenserStatus.setForeground(Color.GRAY);
-                cashDispenserContainer.setBackground(new Color(18, 27, 38));
-
-                // Transiciona para tela final
-                currentState = ScreenState.SUCCESS;
-                updateScreen();
-                successTimer.start();
-            }
-        });
-
-        // Temporizador para simulação da impressão
-        printAnimationTimer = new Timer(3000, new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                printAnimationTimer.stop();
-                lblPrinterStatus.setText("PRONTA");
-                lblPrinterStatus.setForeground(Color.LIGHT_GRAY);
-                receiptPrinterContainer.setBackground(new Color(18, 27, 38));
-
-                // Mostrar o extrato impresso na tela
-                showVirtualReceipt();
-
-                currentState = ScreenState.SUCCESS;
-                updateScreen();
-                successTimer.start();
-            }
-        });
-
-        // Temporizador de tela de sucesso (4s e depois volta para o menu ou tela
-        // inicial)
-        successTimer = new Timer(4000, new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                successTimer.stop();
-                if (atmService.isAuthenticated()) {
-                    currentState = ScreenState.MAIN_MENU;
-                } else {
-                    currentState = ScreenState.WELCOME;
-                }
-                inputBuffer.setLength(0);
-                updateScreen();
-            }
-        });
-    }
-
-    private void setupKeyboardInterception() {
-        KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(e -> {
-            if (e.getID() == KeyEvent.KEY_PRESSED) {
-                char keyChar = e.getKeyChar();
-                int keyCode = e.getKeyCode();
-
-                if (Character.isDigit(keyChar)) {
-                    handleKeyInput(String.valueOf(keyChar));
-                    return true;
-                } else if (keyCode == KeyEvent.VK_BACK_SPACE || keyCode == KeyEvent.VK_ESCAPE) {
-                    handleClearOrCancel();
-                    return true;
-                } else if (keyCode == KeyEvent.VK_ENTER) {
-                    handleConfirm();
-                    return true;
-                }
-            }
-            return false;
-        });
-    }
-
-    private void setupListeners() {
-        // Configura cliques nos botões numéricos
-        JButton[] numButtons = { btn1, btn2, btn3, btn4, btn5, btn6, btn7, btn8, btn9, btn0 };
-        for (JButton btn : numButtons) {
-            btn.addActionListener(e -> handleKeyInput(btn.getText()));
-        }
+        btn0.addActionListener(numListener);
+        btn1.addActionListener(numListener);
+        btn2.addActionListener(numListener);
+        btn3.addActionListener(numListener);
+        btn4.addActionListener(numListener);
+        btn5.addActionListener(numListener);
+        btn6.addActionListener(numListener);
+        btn7.addActionListener(numListener);
+        btn8.addActionListener(numListener);
+        btn9.addActionListener(numListener);
 
         btnC.addActionListener(e -> handleClearOrCancel());
-        btnBlank.addActionListener(e -> handleConfirm());
+        btnBlank.addActionListener(e -> handleConfirmButton());
 
-        // Botões físicos laterais
-        btnLeft1.addActionListener(e -> handleSideButton("L1"));
-        btnLeft2.addActionListener(e -> handleSideButton("L2"));
-        btnLeft3.addActionListener(e -> handleSideButton("L3"));
-        btnRight1.addActionListener(e -> handleSideButton("R1"));
-        btnRight2.addActionListener(e -> handleSideButton("R2"));
-        btnRight3.addActionListener(e -> handleSideButton("R3"));
+        btnLeft1.addActionListener(e -> handleLeftOption(1));
+        btnLeft2.addActionListener(e -> handleLeftOption(2));
+        btnLeft3.addActionListener(e -> handleLeftOption(3));
+
+        btnRight1.addActionListener(e -> handleRightOption(1));
+        btnRight2.addActionListener(e -> handleRightOption(2));
+        btnRight3.addActionListener(e -> handleRightOption(3));
     }
 
-    private void handleKeyInput(String text) {
-        if (isAnimationState())
-            return;
+    private void appendInput(String digit) {
+        if (currentState == ATMState.INSERT_CARD ||
+            currentState == ATMState.ENTER_PIN ||
+            currentState == ATMState.WITHDRAW_CUSTOM ||
+            currentState == ATMState.DEPOSIT_INPUT ||
+            currentState == ATMState.TRANSFER_ACCOUNT ||
+            currentState == ATMState.TRANSFER_VALUE) {
 
-        // Limita tamanho do input de acordo com o estado
-        if (currentState == ScreenState.WELCOME) {
-            if (inputBuffer.length() < 10) {
-                inputBuffer.append(text);
-            }
-        } else if (currentState == ScreenState.ENTER_PIN) {
-            if (inputBuffer.length() < 4) {
-                inputBuffer.append(text);
-            }
-        } else if (currentState == ScreenState.WITHDRAW_CUSTOM || currentState == ScreenState.DEPOSIT_INPUT
-                || currentState == ScreenState.TRANSFER_VALUE) {
-            if (inputBuffer.length() < 7) { // Permite até R$ 9.999,99
-                inputBuffer.append(text);
-            }
-        } else if (currentState == ScreenState.TRANSFER_ACCOUNT) {
-            if (inputBuffer.length() < 10) {
-                inputBuffer.append(text);
+            if (inputBuffer.length() < 12) {
+                inputBuffer.append(digit);
+                updateUIState();
             }
         }
-        updateScreen();
     }
 
     private void handleClearOrCancel() {
-        if (isAnimationState())
-            return;
-
         if (inputBuffer.length() > 0) {
-            inputBuffer.setLength(inputBuffer.length() - 1);
-            updateScreen();
+            inputBuffer.deleteCharAt(inputBuffer.length() - 1);
+            updateUIState();
         } else {
-            // Se buffer vazio, o botão C cancela a operação ou volta de tela
-            switch (currentState) {
-                case ENTER_PIN:
-                    atmService.logout();
-                    currentState = ScreenState.WELCOME;
-                    break;
-                case WITHDRAW_SELECT:
-                case DEPOSIT_INPUT:
-                case TRANSFER_ACCOUNT:
-                case SHOW_BALANCE:
-                case SHOW_STATEMENT:
-                    currentState = ScreenState.MAIN_MENU;
-                    break;
-                case WITHDRAW_CUSTOM:
-                    currentState = ScreenState.WITHDRAW_SELECT;
-                    break;
-                case TRANSFER_VALUE:
-                    currentState = ScreenState.TRANSFER_ACCOUNT;
-                    break;
-                case MAIN_MENU:
-                    atmService.logout();
-                    currentState = ScreenState.WELCOME;
-                    break;
-                case ERROR:
-                    if (atmService.isAuthenticated()) {
-                        currentState = ScreenState.MAIN_MENU;
-                    } else {
-                        currentState = ScreenState.WELCOME;
-                    }
-                    break;
-                default:
-                    // Sem ação
-                    break;
+            if (currentState != ATMState.INSERT_CARD) {
+                atmService.logout();
+                changeState(ATMState.INSERT_CARD);
             }
-            inputBuffer.setLength(0);
-            updateScreen();
         }
     }
 
-    private void handleConfirm() {
-        if (isAnimationState())
-            return;
-
+    private void handleConfirmButton() {
         try {
             switch (currentState) {
-                case WELCOME:
+                case INSERT_CARD:
                     if (inputBuffer.length() > 0) {
-                        targetAccountNumber = inputBuffer.toString();
+                        String accNum = inputBuffer.toString();
                         inputBuffer.setLength(0);
-                        currentState = ScreenState.ENTER_PIN;
-                    } else {
-                        errorMessage = "DIGITE O NÚMERO DA CONTA";
-                        currentState = ScreenState.ERROR;
+                        atmService.selectAccount(accNum);
+                        changeState(ATMState.ENTER_PIN);
                     }
                     break;
 
                 case ENTER_PIN:
-                    if (inputBuffer.length() == 4) {
+                    if (inputBuffer.length() > 0) {
                         String pin = inputBuffer.toString();
                         inputBuffer.setLength(0);
-                        atmService.authenticate(targetAccountNumber, pin);
-                        currentState = ScreenState.MAIN_MENU;
-                    } else {
-                        errorMessage = "DIGITE A SENHA DE 4 DÍGITOS";
-                        currentState = ScreenState.ERROR;
+                        atmService.authenticate(pin);
+                        changeState(ATMState.MAIN_MENU);
                     }
                     break;
 
                 case WITHDRAW_CUSTOM:
                     if (inputBuffer.length() > 0) {
-                        double val = Double.parseDouble(inputBuffer.toString());
+                        double amount = Double.parseDouble(inputBuffer.toString());
                         inputBuffer.setLength(0);
-                        triggerCashWithdrawal(val);
-                    } else {
-                        errorMessage = "DIGITE UM VALOR VÁLIDO";
-                        currentState = ScreenState.ERROR;
+                        atmService.withdraw(amount);
+                        changeState(ATMState.ANIMATION_CASH);
                     }
                     break;
 
                 case DEPOSIT_INPUT:
                     if (inputBuffer.length() > 0) {
-                        double val = Double.parseDouble(inputBuffer.toString());
+                        double amount = Double.parseDouble(inputBuffer.toString());
                         inputBuffer.setLength(0);
-                        triggerDeposit(val);
-                    } else {
-                        errorMessage = "DIGITE UM VALOR VÁLIDO";
-                        currentState = ScreenState.ERROR;
+                        atmService.deposit(amount);
+                        changeState(ATMState.ANIMATION_DEPOSIT);
                     }
                     break;
 
@@ -346,226 +125,91 @@ public class AtmFrame extends javax.swing.JFrame {
                     if (inputBuffer.length() > 0) {
                         targetAccountNumber = inputBuffer.toString();
                         inputBuffer.setLength(0);
-                        currentState = ScreenState.TRANSFER_VALUE;
-                    } else {
-                        errorMessage = "INSIRA A CONTA DESTINO";
-                        currentState = ScreenState.ERROR;
+                        changeState(ATMState.TRANSFER_VALUE);
                     }
                     break;
 
                 case TRANSFER_VALUE:
-                    if (inputBuffer.length() > 0) {
-                        double val = Double.parseDouble(inputBuffer.toString());
+                    if (inputBuffer.length() > 0 && targetAccountNumber != null) {
+                        double amount = Double.parseDouble(inputBuffer.toString());
                         inputBuffer.setLength(0);
-                        atmService.transfer(targetAccountNumber, val);
-                        currentState = ScreenState.SUCCESS;
-                    } else {
-                        errorMessage = "DIGITE UM VALOR VÁLIDO";
-                        currentState = ScreenState.ERROR;
+                        atmService.transfer(targetAccountNumber, amount);
+                        changeState(ATMState.SUCCESS);
                     }
                     break;
 
                 default:
-                    // Sem ação no confirm para outros estados
                     break;
             }
-        } catch (AccountBlockedException ex) {
-            errorMessage = "CONTA BLOQUEADA!";
-            currentState = ScreenState.ERROR;
-        } catch (InvalidPinException ex) {
-            errorMessage = "SENHA INCORRETA!";
-            currentState = ScreenState.ERROR;
-        } catch (InsufficientFundsException ex) {
-            errorMessage = "SALDO INSUFICIENTE!";
-            currentState = ScreenState.ERROR;
-        } catch (DailyLimitExceededException ex) {
-            errorMessage = "LIMITE DIÁRIO EXCEDIDO!";
-            currentState = ScreenState.ERROR;
-        } catch (IllegalArgumentException ex) {
-            errorMessage = ex.getMessage().toUpperCase();
-            currentState = ScreenState.ERROR;
-        } catch (Exception ex) {
-            errorMessage = "ERRO NO SISTEMA";
-            currentState = ScreenState.ERROR;
+        } catch (ATMException ex) {
+            errorMessage = ex.getMessage();
+            changeState(ATMState.ERROR);
         }
-        updateScreen();
     }
 
-    private void handleSideButton(String btnId) {
-        if (isAnimationState())
-            return;
-
+    private void handleLeftOption(int option) {
         switch (currentState) {
             case MAIN_MENU:
-                if (btnId.equals("L1")) { // Saque
-                    currentState = ScreenState.WITHDRAW_SELECT;
-                } else if (btnId.equals("L2")) { // Depósito
-                    currentState = ScreenState.DEPOSIT_INPUT;
-                } else if (btnId.equals("L3")) { // Transferência
-                    currentState = ScreenState.TRANSFER_ACCOUNT;
-                } else if (btnId.equals("R1")) { // Saldo
-                    currentState = ScreenState.SHOW_BALANCE;
-                } else if (btnId.equals("R2")) { // Extrato
-                    triggerPrintStatement();
-                } else if (btnId.equals("R3")) { // Sair
+                if (option == 1) changeState(ATMState.WITHDRAW_SELECT);
+                else if (option == 2) changeState(ATMState.DEPOSIT_INPUT);
+                else if (option == 3) changeState(ATMState.TRANSFER_ACCOUNT);
+                break;
+
+            case WITHDRAW_SELECT:
+                if (option == 1) processWithdraw(20.0);
+                else if (option == 2) processWithdraw(50.0);
+                else if (option == 3) processWithdraw(100.0);
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    private void handleRightOption(int option) {
+        switch (currentState) {
+            case MAIN_MENU:
+                if (option == 1) changeState(ATMState.SHOW_BALANCE);
+                else if (option == 2) changeState(ATMState.SHOW_STATEMENT);
+                else if (option == 3) {
                     atmService.logout();
-                    currentState = ScreenState.WELCOME;
+                    changeState(ATMState.INSERT_CARD);
                 }
                 break;
 
             case WITHDRAW_SELECT:
-                if (btnId.equals("L1")) {
-                    triggerCashWithdrawal(20);
-                } else if (btnId.equals("L2")) {
-                    triggerCashWithdrawal(50);
-                } else if (btnId.equals("L3")) {
-                    triggerCashWithdrawal(100);
-                } else if (btnId.equals("R1")) {
-                    triggerCashWithdrawal(200);
-                } else if (btnId.equals("R2")) {
-                    triggerCashWithdrawal(500);
-                } else if (btnId.equals("R3")) {
-                    currentState = ScreenState.WITHDRAW_CUSTOM;
-                }
+                if (option == 1) processWithdraw(200.0);
+                else if (option == 2) processWithdraw(500.0);
+                else if (option == 3) changeState(ATMState.WITHDRAW_CUSTOM);
                 break;
 
             case SHOW_BALANCE:
             case SHOW_STATEMENT:
-                if (btnId.equals("R3")) {
-                    currentState = ScreenState.MAIN_MENU;
-                }
+                if (option == 3) changeState(ATMState.MAIN_MENU);
                 break;
 
             default:
-                // Botões laterais desativados em outros estados
                 break;
         }
-        inputBuffer.setLength(0);
-        updateScreen();
     }
 
-    private boolean isAnimationState() {
-        return currentState == ScreenState.ANIMATION_CASH ||
-                currentState == ScreenState.ANIMATION_PRINT ||
-                currentState == ScreenState.ANIMATION_DEPOSIT;
-    }
-
-    private void triggerCashWithdrawal(double val) {
+    private void processWithdraw(double amount) {
         try {
-            atmService.withdraw(val);
-            currentState = ScreenState.ANIMATION_CASH;
-            updateScreen();
-
-            // Ativa slot físico com luz e indicação de dinheiro
-            lblCashDispenserStatus.setText("RETIRE SUAS CÉDULAS");
-            lblCashDispenserStatus.setForeground(new Color(50, 255, 50));
-            cashDispenserContainer.setBackground(new Color(20, 80, 20)); // Fundo verde iluminado
-
-            cashAnimationTimer.start();
-        } catch (Exception ex) {
-            errorMessage = ex.getMessage().toUpperCase();
-            currentState = ScreenState.ERROR;
-            updateScreen();
+            atmService.withdraw(amount);
+            changeState(ATMState.ANIMATION_CASH);
+        } catch (ATMException ex) {
+            errorMessage = ex.getMessage();
+            changeState(ATMState.ERROR);
         }
     }
 
-    private void triggerDeposit(double val) {
-        try {
-            atmService.deposit(val);
-            currentState = ScreenState.ANIMATION_DEPOSIT;
-            updateScreen();
-
-            // Simula processando depósito
-            Timer depTimer = new Timer(2000, e -> {
-                currentState = ScreenState.SUCCESS;
-                updateScreen();
-                successTimer.start();
-            });
-            depTimer.setRepeats(false);
-            depTimer.start();
-        } catch (Exception ex) {
-            errorMessage = ex.getMessage().toUpperCase();
-            currentState = ScreenState.ERROR;
-            updateScreen();
-        }
+    private void changeState(ATMState newState) {
+        this.currentState = newState;
+        this.inputBuffer.setLength(0);
+        updateUIState();
     }
 
-    private void triggerPrintStatement() {
-        currentState = ScreenState.ANIMATION_PRINT;
-        updateScreen();
-
-        lblPrinterStatus.setText("IMPRIMINDO...");
-        lblPrinterStatus.setForeground(Color.YELLOW);
-        receiptPrinterContainer.setBackground(new Color(80, 80, 20)); // Fundo amarelado iluminado
-
-        printAnimationTimer.start();
-    }
-
-    private void showVirtualReceipt() {
-        Account acc = atmService.getCurrentAccount();
-        if (acc == null)
-            return;
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("========================================\n");
-        sb.append("               FIAP BANK                \n");
-        sb.append("        COMPROVANTE DE EXTRATO          \n");
-        sb.append("========================================\n");
-        sb.append("CONTA: ").append(acc.getAccountNumber()).append("\n");
-        sb.append("DATA: ").append(LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")))
-                .append("\n");
-        sb.append("----------------------------------------\n");
-
-        List<Transaction> txs = acc.getTransactions();
-        int count = 0;
-        // Pega as últimas 5 transações
-        for (int i = txs.size() - 1; i >= 0 && count < 5; i--) {
-            Transaction tx = txs.get(i);
-            sb.append(String.format("%-12s %-14s %12s\n",
-                    tx.getTimestamp().format(DateTimeFormatter.ofPattern("dd/MM HH:mm")),
-                    tx.getType().getDescription(),
-                    tx.getAmount().format()));
-            count++;
-        }
-
-        sb.append("----------------------------------------\n");
-        sb.append("SALDO ATUAL: ").append(acc.getBalance().format()).append("\n");
-        sb.append("========================================\n");
-        sb.append("        OBRIGADO POR UTILIZAR           \n");
-        sb.append("             FIAP BANK                  \n");
-        sb.append("========================================\n");
-
-        if (receiptDialog != null) {
-            receiptDialog.dispose();
-        }
-
-        receiptDialog = new JDialog(this, "Extrato Impresso", false);
-        receiptDialog.setSize(320, 450);
-        receiptDialog.setResizable(false);
-
-        txtReceiptPaper = new JTextArea();
-        txtReceiptPaper.setFont(new Font("Monospaced", Font.PLAIN, 12));
-        txtReceiptPaper.setBackground(new Color(250, 250, 245)); // Papel térmico esbranquiçado
-        txtReceiptPaper.setForeground(Color.BLACK);
-        txtReceiptPaper.setText(sb.toString());
-        txtReceiptPaper.setEditable(false);
-        txtReceiptPaper.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-
-        JButton btnTearOff = new JButton("Destacar Comprovante");
-        btnTearOff.addActionListener(e -> receiptDialog.dispose());
-
-        receiptDialog.setLayout(new BorderLayout());
-        receiptDialog.add(new JScrollPane(txtReceiptPaper), BorderLayout.CENTER);
-        receiptDialog.add(btnTearOff, BorderLayout.SOUTH);
-
-        // Posição no lado direito da janela principal
-        Point atmPos = this.getLocation();
-        receiptDialog.setLocation(atmPos.x + this.getWidth() + 10, atmPos.y + 100);
-        receiptDialog.setVisible(true);
-    }
-
-    private void updateScreen() {
-        // Resetar opções por padrão
+    private void updateUIState() {
         lblLeftOpt1.setText(" ");
         lblLeftOpt2.setText(" ");
         lblLeftOpt3.setText(" ");
@@ -574,26 +218,12 @@ public class AtmFrame extends javax.swing.JFrame {
         lblRightOpt3.setText(" ");
         lblScreenMessage.setText(" ");
 
-        // LED de cartão baseado na autenticação
-        if (atmService.isAuthenticated()) {
-            lblCardIndicatorLed.setForeground(new Color(80, 80, 250)); // Azul estático - Cartão lido
-            lblCardIndicatorLed.setText("● CARTÃO VALIDADO");
-        } else if (currentState == ScreenState.WELCOME) {
-            // Controlado pelo cardLedTimer (piscando verde)
-        } else if (currentState == ScreenState.ENTER_PIN) {
-            lblCardIndicatorLed.setForeground(Color.ORANGE);
-            lblCardIndicatorLed.setText("● LENDO SENHA...");
-        } else if (currentState == ScreenState.ERROR) {
-            lblCardIndicatorLed.setForeground(Color.RED);
-            lblCardIndicatorLed.setText("● ERRO NO CARTÃO");
-        }
-
         switch (currentState) {
-            case WELCOME:
+            case INSERT_CARD:
                 lblScreenHeader.setText("--- ATM FIAP BANK ---");
-                lblScreenStatus.setText("DIGITE O NÚMERO DA CONTA");
-                lblScreenInput.setText(inputBuffer.length() > 0 ? inputBuffer.toString() + "_" : "[CONTA]_");
-                lblScreenMessage.setText("Use o teclado físico ou numérico abaixo e clique Confirmar.");
+                lblScreenStatus.setText("INSIRA SEU CARTÃO OU CONTA");
+                lblScreenInput.setText(inputBuffer.length() > 0 ? inputBuffer.toString() : "_");
+                lblScreenMessage.setText("Digite o número da conta e clique em 'Confirmar'.");
                 btnBlank.setText("Confirmar");
                 break;
 
@@ -611,9 +241,9 @@ public class AtmFrame extends javax.swing.JFrame {
                 break;
 
             case MAIN_MENU:
-                Account currentAcc = atmService.getCurrentAccount();
+                AccountInfoDTO currentAcc = atmService.getCurrentAccount();
                 lblScreenHeader.setText("--- MENU PRINCIPAL ---");
-                lblScreenStatus.setText("CONTA ATIVA: " + (currentAcc != null ? currentAcc.getAccountNumber() : ""));
+                lblScreenStatus.setText("CONTA ATIVA: " + (currentAcc != null ? currentAcc.accountNumber() : ""));
                 lblScreenInput.setText("SELECIONE A OPERAÇÃO");
 
                 lblLeftOpt1.setText("> SACAR");
@@ -675,14 +305,13 @@ public class AtmFrame extends javax.swing.JFrame {
                 break;
 
             case SHOW_BALANCE:
-                Account balanceAcc = atmService.getCurrentAccount();
+                AccountInfoDTO balanceAcc = atmService.getCurrentAccount();
                 lblScreenHeader.setText("--- CONSULTA DE SALDO ---");
                 lblScreenStatus.setText("SALDO DISPONÍVEL");
-                lblScreenInput.setText(balanceAcc != null ? balanceAcc.getBalance().format() : "R$ 0,00");
+                lblScreenInput.setText(balanceAcc != null ? String.format("R$ %.2f", balanceAcc.balance()) : "R$ 0,00");
                 lblScreenMessage.setText("Limite Diário Restante: " +
                         (balanceAcc != null
-                                ? balanceAcc.getDailyWithdrawalLimit().minus(balanceAcc.getTotalWithdrawnToday())
-                                        .format()
+                                ? String.format("R$ %.2f", balanceAcc.remainingDailyLimit())
                                 : "R$ 0,00"));
                 lblRightOpt3.setText("VOLTAR <");
                 btnBlank.setText("");
@@ -739,8 +368,7 @@ public class AtmFrame extends javax.swing.JFrame {
         }
     }
 
-    // <editor-fold defaultstate="collapsed" desc="Generated
-    // Code">//GEN-BEGIN:initComponents
+    // <editor-fold defaultstate="collapsed" desc="Generated Code">//GEN-BEGIN:initComponents
     private void initComponents() {
         java.awt.GridBagConstraints gridBagConstraints;
 

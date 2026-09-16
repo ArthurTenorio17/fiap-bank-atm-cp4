@@ -3,9 +3,10 @@ package com.fiap.bank.atm.application.service;
 import com.fiap.bank.atm.domain.exception.InvalidPinException;
 import com.fiap.bank.atm.domain.model.Account;
 import com.fiap.bank.atm.domain.model.Money;
-import com.fiap.bank.atm.domain.model.Transaction;
 import com.fiap.bank.atm.domain.repository.AccountRepository;
+
 import java.util.List;
+import java.util.stream.Collectors;
 
 public class AtmService {
     private final AccountRepository accountRepository;
@@ -15,7 +16,7 @@ public class AtmService {
         this.accountRepository = accountRepository;
     }
 
-    public Account authenticate(String accountNumber, String pin) {
+    public AccountInfoDTO authenticate(String accountNumber, String pin) {
         Account account = accountRepository.findByAccountNumber(accountNumber);
 
         if (account == null) {
@@ -25,9 +26,9 @@ public class AtmService {
         try {
             account.authenticate(pin);
             currentAccount = account;
-            return account;
+            return toAccountInfoDTO(currentAccount);
         } catch (RuntimeException e) {
-            accountRepository.save(account); // Save to persist failed attempts / blocked state
+            accountRepository.save(account); // Salva para persistir tentativas com erro ou estado bloqueado
             throw e;
         }
     }
@@ -57,22 +58,32 @@ public class AtmService {
         accountRepository.save(targetAccount);
     }
 
-    public Money getBalance() {
+    public AccountInfoDTO getAccountInfo() {
         ensureAuthenticated();
-        return currentAccount.getBalance();
+        return toAccountInfoDTO(currentAccount);
     }
 
-    public List<Transaction> getStatement() {
+    public List<TransactionDTO> getStatement() {
         ensureAuthenticated();
-        return currentAccount.getTransactions();
+        return currentAccount.getTransactions().stream()
+                .map(t -> new TransactionDTO(
+                        t.getId() != null ? t.getId().toString() : null,
+                        t.getType() != null ? t.getType().name() : null,
+                        t.getAmount() != null ? t.getAmount().getAmount() : null,
+                        t.getCreatedAt()
+                ))
+                .collect(Collectors.toList());
     }
 
     public void logout() {
         currentAccount = null;
     }
 
-    public Account getCurrentAccount() {
-        return currentAccount;
+    public AccountInfoDTO getCurrentAccount() {
+        if (currentAccount == null) {
+            return null;
+        }
+        return toAccountInfoDTO(currentAccount);
     }
 
     public boolean isAuthenticated() {
@@ -83,5 +94,15 @@ public class AtmService {
         if (!isAuthenticated()) {
             throw new IllegalStateException("Nenhum usuário está autenticado no momento.");
         }
+    }
+
+    private AccountInfoDTO toAccountInfoDTO(Account account) {
+        return new AccountInfoDTO(
+                account.getId() != null ? account.getId().toString() : null,
+                account.getAgency(),
+                account.getNumber(),
+                account.getBalance() != null ? account.getBalance().getAmount() : null,
+                account.getStatus() != null ? account.getStatus().name() : null
+        );
     }
 }
